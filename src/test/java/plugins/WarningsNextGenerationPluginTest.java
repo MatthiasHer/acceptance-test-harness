@@ -10,6 +10,9 @@ import java.nio.file.Paths;
 import java.util.LinkedHashMap;
 import java.util.Map.Entry;
 import java.util.function.Consumer;
+import java.util.regex.Pattern;
+
+import javax.mail.MessagingException;
 
 import org.junit.Test;
 
@@ -21,6 +24,7 @@ import org.jenkinsci.test.acceptance.junit.AbstractJUnitTest;
 import org.jenkinsci.test.acceptance.junit.WithCredentials;
 import org.jenkinsci.test.acceptance.junit.WithDocker;
 import org.jenkinsci.test.acceptance.junit.WithPlugins;
+import org.jenkinsci.test.acceptance.plugins.mailer.Mailer;
 import org.jenkinsci.test.acceptance.plugins.maven.MavenInstallation;
 import org.jenkinsci.test.acceptance.plugins.maven.MavenModuleSet;
 import org.jenkinsci.test.acceptance.plugins.ssh_slaves.SshSlaveLauncher;
@@ -48,6 +52,7 @@ import org.jenkinsci.test.acceptance.po.FreeStyleJob;
 import org.jenkinsci.test.acceptance.po.Job;
 import org.jenkinsci.test.acceptance.po.Slave;
 import org.jenkinsci.test.acceptance.po.WorkflowJob;
+import org.jenkinsci.test.acceptance.utils.mail.Mailtrap;
 
 import static org.jenkinsci.test.acceptance.plugins.warnings_ng.Assertions.*;
 
@@ -107,6 +112,125 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
     @Inject
     private DockerContainerHolder<JavaGitContainer> dockerContainer;
 
+    @Test
+    public void should_distinct_warnings() throws IOException, MessagingException {
+
+        Mailtrap mail = new Mailtrap("4248f76c305286", "5669cd0ed75dd3", "993b8fad4b920690a42ed751cfdaeafd", "626449");
+        mail.setup(jenkins);
+
+        FreeStyleJob job = createFreeStyleJob("build_status_test/build_01");
+
+        job.configure();
+        job.addPublisher(IssuesRecorder.class, recorder -> {
+            recorder.setTool("CheckStyle");
+            recorder.setEnabledForFailure(true);
+            recorder.addQualityGateConfiguration(1, QualityGateType.TOTAL, true);
+        });
+
+        job.save();
+
+        Build referenceBuild = buildJob(job).shouldBe(Result.UNSTABLE);
+
+        referenceBuild.open();
+        AnalysisSummary checkstyleRef = new AnalysisSummary(referenceBuild, CHECKSTYLE_ID);
+        assertThat(checkstyleRef).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyleRef).hasTitleText("CheckStyle: One warning");
+        assertThat(checkstyleRef).hasNewSize(0);
+        assertThat(checkstyleRef).hasFixedSize(0);
+        assertThat(checkstyleRef).hasReferenceBuild(0);
+
+       /* referenceBuild.open();
+        AnalysisSummary pmdRef = new AnalysisSummary(referenceBuild, PMD_ID);
+        assertThat(pmdRef).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(pmdRef).hasTitleText("PMD: 3 warnings");
+        assertThat(pmdRef).hasNewSize(0);
+        assertThat(pmdRef).hasFixedSize(0);
+        assertThat(pmdRef).hasReferenceBuild(0);*/
+
+        reconfigureJobWithResource(job, "build_status_test/build_02");
+        job.configure();
+        Mailer mailer=job.addPublisher(Mailer.class);
+        mailer.recipients.set("root@example.com");
+        job.save();
+
+        // jenkins.restart();
+        Build build = buildJob(job).shouldBe(Result.UNSTABLE);
+
+      /*  build.open();
+        AnalysisSummary pmd = new AnalysisSummary(build, PMD_ID);
+        assertThat(pmd).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(pmd).hasTitleText("PMD: 2 warnings");
+        assertThat(pmd).hasNewSize(0);
+        //assertThat(pmd).hasFixedSize(1);
+        // assertThat(pmd).hasReferenceBuild(1);*/
+
+        build.open();
+        AnalysisSummary checkstyle = new AnalysisSummary(build, CHECKSTYLE_ID);
+        assertThat(checkstyle).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyle).hasTitleText("CheckStyle: 3 warnings");
+        assertThat(checkstyle).hasNewSize(0);
+        assertThat(checkstyle).hasFixedSize(1);
+        assertThat(checkstyle).hasReferenceBuild(1);
+
+        mail.assertMail(
+                Pattern.compile("Jenkins build is still unstable: .* #2"),
+                "root@example.com",
+                Pattern.compile(" "));
+
+    }
+
+    @Test
+    public void should_reset_QualityGate() throws IOException, MessagingException {
+
+        Mailtrap mail = new Mailtrap("4248f76c305286", "5669cd0ed75dd3", "993b8fad4b920690a42ed751cfdaeafd", "626449");
+        mail.setup(jenkins);
+
+        FreeStyleJob job = createFreeStyleJob("build_status_test/build_01");
+
+        job.configure();
+        job.addPublisher(IssuesRecorder.class, recorder -> {
+            recorder.setTool("CheckStyle");
+            recorder.setEnabledForFailure(true);
+            recorder.addQualityGateConfiguration(1, QualityGateType.TOTAL, true);
+        });
+
+        job.save();
+
+        Build referenceBuild = buildJob(job).shouldBe(Result.UNSTABLE);
+
+        referenceBuild.open();
+        AnalysisSummary checkstyleRef = new AnalysisSummary(referenceBuild, CHECKSTYLE_ID);
+        assertThat(checkstyleRef).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyleRef).hasTitleText("CheckStyle: One warning");
+        assertThat(checkstyleRef).hasNewSize(0);
+        assertThat(checkstyleRef).hasFixedSize(0);
+        assertThat(checkstyleRef).hasReferenceBuild(0);
+
+        referenceBuild.openStatusPage();
+        referenceBuild.clickButton("Reset quality gate");
+        reconfigureJobWithResource(job, "build_status_test/build_02");
+        job.configure();
+        Mailer mailer=job.addPublisher(Mailer.class);
+        mailer.recipients.set("root@example.com");
+        job.save();
+
+        // jenkins.restart();
+        Build build = buildJob(job).shouldBe(Result.UNSTABLE);
+
+        build.open();
+        AnalysisSummary checkstyle = new AnalysisSummary(build, CHECKSTYLE_ID);
+        assertThat(checkstyle).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyle).hasTitleText("CheckStyle: 3 warnings");
+        assertThat(checkstyle).hasNewSize(3);
+        assertThat(checkstyle).hasFixedSize(1);
+        assertThat(checkstyle).hasReferenceBuild(0);
+
+        mail.assertMail(
+                Pattern.compile("Jenkins build is still unstable: .* #2"),
+                "root@example.com",
+                Pattern.compile(" "));
+
+    }
     /**
      * Runs a pipeline with checkstyle and pmd. Verifies the expansion of tokens with the token-macro plugin.
      */
