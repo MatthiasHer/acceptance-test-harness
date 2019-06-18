@@ -9,12 +9,14 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.LinkedHashMap;
 import java.util.Map.Entry;
+import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 import javax.mail.MessagingException;
 
 import org.junit.Test;
+import org.openqa.selenium.By;
 import org.openqa.selenium.WebElement;
 
 import com.google.inject.Inject;
@@ -53,6 +55,8 @@ import org.jenkinsci.test.acceptance.po.FreeStyleJob;
 import org.jenkinsci.test.acceptance.po.Job;
 import org.jenkinsci.test.acceptance.po.Slave;
 import org.jenkinsci.test.acceptance.po.WorkflowJob;
+import org.jenkinsci.test.acceptance.slave.LocalSlaveController;
+import org.jenkinsci.test.acceptance.slave.SlaveController;
 import org.jenkinsci.test.acceptance.utils.mail.Mailtrap;
 
 import static org.jenkinsci.test.acceptance.plugins.warnings_ng.Assertions.*;
@@ -115,33 +119,28 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
     @Test
     @WithPlugins({"token-macro", "workflow-cps", "pipeline-stage-step", "workflow-durable-task-step", "workflow-basic-steps"})
-    public void should_distinct_warnings_pipeline()
-    { //emailext attachLog: true, body: '', subject: '', to: 'root@example.com'
+    public void should_distinct_warnings_pipeline() { //emailext attachLog: true, body: '', subject: '', to: 'root@example.com'
         /*ignoreQualityGate: true,
         recordIssues enabledForFailure: true, qualityGates: [[threshold: 1, type: 'TOTAL', unstable: true]], tools: [checkStyle()]*/
         WorkflowJob job = jenkins.jobs.create(WorkflowJob.class);
 
-        String checkstyleResult = job.copyResourceStep(WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_00/checkstyle-result.xml");
+        String checkstyleResult = job.copyResourceStep(
+                WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_00/checkstyle-result.xml");
+        job.configure();
         job.script.set("node {\n"
                 + checkstyleResult.replace("\\", "\\\\")
                 + "recordIssues tool: checkStyle(pattern: '**/checkstyle*')\n"
-                +"qualityGates: [[threshold: 1, type: 'TOTAL', unstable: true]]\n"
+                + "qualityGates: [[threshold: 2, type: 'TOTAL', unstable: true]]\n"
                 + "}");
         job.sandbox.check();
         job.save();
 
-        Build referenceBuild=buildJob(job);
+        Build referenceBuild = buildJob(job);
 
-        String checkstyleResult1 = job.copyResourceStep(WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_00/checkstyle-result.xml");
-        job.script.set("node {\n"
-                + checkstyleResult1.replace("\\", "\\\\")
-                + "recordIssues tool: checkStyle(pattern: '**/checkstyle*')\n"
-                +", qualityGates: [[threshold: 1, type: 'TOTAL', unstable: true]]\n"
-                + "}");
-        job.sandbox.check();
-        job.save();
+        String checkstyleResult1 = job.copyResourceStep(
+                WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_01/checkstyle-result.xml");
 
-        Build build1=buildJob(job);
+        Build build1 = buildJob(job);
 
         AnalysisSummary checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
         assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
@@ -153,25 +152,27 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
     }
 
     @Test
-    public void should_distinct_warnings() throws IOException, MessagingException {
+    public void should_distinct_warnings()
+            throws IOException, MessagingException, ExecutionException, InterruptedException {
 
         Mailtrap mail = new Mailtrap("4248f76c305286", "5669cd0ed75dd3", "993b8fad4b920690a42ed751cfdaeafd", "626449");
         mail.setup(jenkins);
 
-        FreeStyleJob job = createFreeStyleJob("qualityGate_test/build_00");
+        Slave agent = createAgent();
+        FreeStyleJob job = createFreeStyleJobForDockerAgent(agent, "qualityGate_test/build_00");
         job.configure();
         job.addPublisher(IssuesRecorder.class, recorder -> {
             recorder.setTool("CheckStyle");
             recorder.setEnabledForFailure(true);
             recorder.addQualityGateConfiguration(2, QualityGateType.TOTAL, true);
         });
-        Mailer mailer=job.addPublisher(Mailer.class);
+        Mailer mailer = job.addPublisher(Mailer.class);
         mailer.recipients.set("root@example.com");
         job.save();
 
         buildJob(job);
 
-        reconfigureJobWithResource(job,"qualityGate_test/build_01");
+        reconfigureJobWithResource(job, "qualityGate_test/build_01");
 
         Build referenceBuild = buildJob(job).shouldBe(Result.UNSTABLE);
 
@@ -203,26 +204,54 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
                 Pattern.compile(" "));
     }
 
+    private Slave createAgent() throws ExecutionException, InterruptedException {
+        SlaveController controller = new LocalSlaveController();
+        Slave agent = controller.install(jenkins).get();
+        agent.configure();
+        agent.setLabels("agent");
+        agent.save();
+        agent.waitUntilOnline();
+
+        assertThat(agent.isOnline()).isTrue();
+        return agent;
+    }
+
+    private boolean isWebElementDisappeared(Build build, By selector, int maxRepetition) {
+        boolean iO = false;
+        int repetition = 0;
+
+        while (repetition < maxRepetition) {
+            WebElement element = build.getElement(selector);
+            if (element == null) {
+                return true;
+            }
+            repetition++;
+        }
+        return false;
+    }
+
     @Test
-    public void should_reset_QualityGate() throws IOException, MessagingException {
+    public void should_reset_QualityGate()
+            throws IOException, MessagingException, ExecutionException, InterruptedException {
 
-       Mailtrap mail = new Mailtrap("4248f76c305286", "5669cd0ed75dd3", "993b8fad4b920690a42ed751cfdaeafd", "626449");
-      mail.setup(jenkins);
+        Mailtrap mail = new Mailtrap("4248f76c305286", "5669cd0ed75dd3", "993b8fad4b920690a42ed751cfdaeafd", "626449");
+        mail.setup(jenkins);
 
-        FreeStyleJob job = createFreeStyleJob("qualityGate_test/build_00");
+        Slave agent = createAgent();
+        FreeStyleJob job = createFreeStyleJobForDockerAgent(agent, "qualityGate_test/build_00");
         job.configure();
         job.addPublisher(IssuesRecorder.class, recorder -> {
             recorder.setTool("CheckStyle");
             recorder.setEnabledForFailure(true);
             recorder.addQualityGateConfiguration(2, QualityGateType.TOTAL, true);
         });
-        /*Mailer mailer=job.addPublisher(Mailer.class);
+        Mailer mailer = job.addPublisher(Mailer.class);
         mailer.recipients.set("root@example.com");
-        job.save();*/
+        job.save();
 
         buildJob(job);
 
-        reconfigureJobWithResource(job,"qualityGate_test/build_01");
+        reconfigureJobWithResource(job, "qualityGate_test/build_01");
 
         Build referenceBuild = buildJob(job).shouldBe(Result.UNSTABLE);
 
@@ -235,15 +264,10 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
         assertThat(checkstyle1).hasReferenceBuild(1);
 
         referenceBuild.openStatusPage();
-        WebElement button=referenceBuild.getElement(by.xpath("button[@id='checkstyle-resetReference']"));
-        if(button==null)
-            System.out.print("error empty button");
-
-        referenceBuild.clickButton("Reset quality gate");
-
-        WebElement button2=referenceBuild.getElement(by.xpath("button[@id='checkstyle-resetReference']"));
-        if(button2==null)
-            System.out.print("yeah");
+        String resetButton = "Reset quality gate";
+        referenceBuild.clickButton(resetButton);
+        boolean isButtonDisappeared = isWebElementDisappeared(referenceBuild, by.button(resetButton), 200);
+        assertThat(isButtonDisappeared).isTrue();
 
         reconfigureJobWithResource(job, "qualityGate_test/build_02");
 
@@ -258,10 +282,10 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
         assertThat(checkstyle2).hasFixedSize(0);
         assertThat(checkstyle2).hasReferenceBuild(2);
 
-       /* mail.assertMail(
+        mail.assertMail(
                 Pattern.compile("Jenkins build is still unstable: .* #3"),
                 "root@example.com",
-                Pattern.compile(" "));*/
+                Pattern.compile(" "));
     }
 
     /**
@@ -616,8 +640,7 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
     }
 
     /**
-     * Runs a freestyle job that publishes checkstyle warnings. Verifies the content of the info and error
-     * log view.
+     * Runs a freestyle job that publishes checkstyle warnings. Verifies the content of the info and error log view.
      */
     @Test
     public void should_show_info_and_error_messages_in_freestyle_job() {
@@ -633,8 +656,7 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
     }
 
     /**
-     * Runs a pipeline that publishes checkstyle warnings. Verifies the content of the info and error
-     * log view.
+     * Runs a pipeline that publishes checkstyle warnings. Verifies the content of the info and error log view.
      */
     @Test
     @WithPlugins({"workflow-cps", "pipeline-stage-step", "workflow-durable-task-step", "workflow-basic-steps"})
@@ -679,7 +701,8 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
     /**
      * Creates and builds a maven job and verifies that all warnings are shown in the summary and details views.
      */
-    @Test @WithPlugins("maven-plugin")
+    @Test
+    @WithPlugins("maven-plugin")
     public void should_show_maven_warnings_in_maven_project() {
         MavenModuleSet job = createMavenProject();
         copyResourceFilesToWorkspace(job, SOURCE_VIEW_FOLDER + "pom.xml");
@@ -719,7 +742,8 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
     /**
      * Verifies that package and namespace names are resolved.
      */
-    @Test @WithPlugins("maven-plugin")
+    @Test
+    @WithPlugins("maven-plugin")
     public void should_resolve_packages_and_namespaces() {
         MavenModuleSet job = createMavenProject();
         job.copyDir(job.resource(SOURCE_VIEW_FOLDER));
@@ -769,7 +793,9 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
     /**
      * Verifies that warnings can be parsed on a agent as well.
      */
-    @Test @WithDocker @WithPlugins("ssh-slaves")
+    @Test
+    @WithDocker
+    @WithPlugins("ssh-slaves")
     @WithCredentials(credentialType = WithCredentials.SSH_USERNAME_PRIVATE_KEY, values = {CREDENTIALS_ID, CREDENTIALS_KEY})
     public void should_parse_warnings_on_agent() {
         DumbSlave dockerAgent = createDockerAgent();
