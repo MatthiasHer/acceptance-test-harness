@@ -157,11 +157,7 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
         build1.open();
         AnalysisSummary checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
-        assertThat(checkstyle1).hasNewSize(1);
-        assertThat(checkstyle1).hasFixedSize(0);
-        assertThat(checkstyle1).hasReferenceBuild(1);
+        assertWarningsAndQualityGate(checkstyle1, QualityGateResult.UNSTABLE, "CheckStyle: 2 warnings", 1, 0, 1);
 
         //Verify that results still remain the same after restart
         jenkins.restart();
@@ -169,11 +165,7 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
         build1.open();
         checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
-        assertThat(checkstyle1).hasNewSize(1);
-        assertThat(checkstyle1).hasFixedSize(0);
-        assertThat(checkstyle1).hasReferenceBuild(1);
+        assertWarningsAndQualityGate(checkstyle1, QualityGateResult.UNSTABLE, "CheckStyle: 2 warnings", 1, 0, 1);
 
         reconfigureJobWithResource(job, "qualityGate_test/build_02");
         job.configure();
@@ -188,11 +180,7 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
         build2.open();
         AnalysisSummary checkstyle2 = new AnalysisSummary(build2, CHECKSTYLE_ID);
-        assertThat(checkstyle2).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle2).hasTitleText("CheckStyle: 3 warnings");
-        assertThat(checkstyle2).hasNewSize(2);
-        assertThat(checkstyle2).hasFixedSize(0);
-        assertThat(checkstyle2).hasReferenceBuild(1);
+        assertWarningsAndQualityGate(checkstyle1, QualityGateResult.UNSTABLE, "CheckStyle: 3 warnings", 2, 0, 1);
 
         try {
             mail.assertMail(
@@ -244,22 +232,14 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
         build1.open();
         AnalysisSummary checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
-        assertThat(checkstyle1).hasNewSize(1);
-        assertThat(checkstyle1).hasFixedSize(0);
-        assertThat(checkstyle1).hasReferenceBuild(1);
+        assertWarningsAndQualityGate(checkstyle1, QualityGateResult.UNSTABLE, "CheckStyle: 2 warnings", 1, 0, 1);
 
         //Verify that results still remain the same after restart
         jenkins.restart();
         build1 = job.getLastBuild().shouldBeUnstable();
         build1.open();
         checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
-        assertThat(checkstyle1).hasNewSize(1);
-        assertThat(checkstyle1).hasFixedSize(0);
-        assertThat(checkstyle1).hasReferenceBuild(1);
+        assertWarningsAndQualityGate(checkstyle1, QualityGateResult.UNSTABLE, "CheckStyle: 2 warnings", 1, 0, 1);
 
         String checkstyleResult2 = job.copyResourceStep(
                 WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_02/checkstyle-result.xml");
@@ -268,7 +248,8 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
                 + ", recipientProviders: [developers()]"
                 + ", subject: '''$DEFAULT_SUBJECT'''"
                 + ", to: '''" + RECIPIENT + "'''"
-                + ", replyTo: '''" + mail.fingerprint + "'''\n"; //Due to any reason, the global repyTo setting is not set.
+                + ", replyTo: '''" + mail.fingerprint
+                + "'''\n"; //Due to any reason, the global repyTo setting is not set.
 
         job.configure();
         job.script.set("node('agent')  {\n"
@@ -283,11 +264,7 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
         build2.open();
         AnalysisSummary checkstyle2 = new AnalysisSummary(build2, CHECKSTYLE_ID);
-        assertThat(checkstyle2).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle2).hasTitleText("CheckStyle: 3 warnings");
-        assertThat(checkstyle2).hasNewSize(2);
-        assertThat(checkstyle2).hasFixedSize(0);
-        assertThat(checkstyle2).hasReferenceBuild(1);
+        assertWarningsAndQualityGate(checkstyle1, QualityGateResult.UNSTABLE, "CheckStyle: 3 warnings", 2, 0, 1);
 
         try {
             mail.assertMail(
@@ -332,44 +309,14 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
         build1.open();
         AnalysisSummary checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
-        assertThat(checkstyle1).hasNewSize(1);
-        assertThat(checkstyle1).hasFixedSize(0);
-        assertThat(checkstyle1).hasReferenceBuild(1);
-
+        assertWarningsAndQualityGate(checkstyle1, QualityGateResult.UNSTABLE, "CheckStyle: 2 warnings", 1, 0, 1);
         //Validate that the reset button is not visible for user with readOnly permission
-        jenkins.logout();
-        jenkins.login().doLogin(READONLY_USERNAME);
-        build1 = job.getLastBuild();
-        build1.open();
-        checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        assertThat(checkstyle1.getQualityGateResetButton()).isNull();
-        jenkins.logout();
+        checkRightsQualityGateButtonAndResetQualityGate(job, build1);
 
-        jenkins.login().doLogin(ADMIN_USERNAME);
-        build1 = job.getLastBuild();
-        build1.open();
-        checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        WebElement resetButton = checkstyle1.getQualityGateResetButton();
-        assertThat(resetButton).isNotNull();
-        resetButton.click();
-
-        //Validate that the reset button disappears after clicking it once.
-        new WebDriverWait(driver, 60).until(ExpectedConditions.invisibilityOf(resetButton));
-
-        //Verify that results still remain the same after restart
-        jenkins.restart();
-        jenkins.logout();
-        jenkins.login().doLogin(ADMIN_USERNAME);
         build1 = job.getLastBuild().shouldBeUnstable();
         build1.open();
         checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
-        assertThat(checkstyle1).hasNewSize(1);
-        assertThat(checkstyle1).hasFixedSize(0);
-        assertThat(checkstyle1).hasReferenceBuild(1);
+        assertWarningsAndQualityGate(checkstyle1, QualityGateResult.UNSTABLE, "CheckStyle: 2 warnings", 1, 0, 1);
         assertThat(checkstyle1.getQualityGateResetButton()).isNull();
 
         reconfigureJobWithResource(job, "qualityGate_test/build_02");
@@ -385,11 +332,7 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
         build2.open();
         AnalysisSummary checkstyle2 = new AnalysisSummary(build2, CHECKSTYLE_ID);
-        assertThat(checkstyle2).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle2).hasTitleText("CheckStyle: 3 warnings");
-        assertThat(checkstyle2).hasNewSize(1);
-        assertThat(checkstyle2).hasFixedSize(0);
-        assertThat(checkstyle2).hasReferenceBuild(2);
+        assertWarningsAndQualityGate(checkstyle1, QualityGateResult.UNSTABLE, "CheckStyle: 3 warnings", 1, 0, 2);
 
         try {
             mail.assertMail(
@@ -447,45 +390,16 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
         build1.open();
         AnalysisSummary checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
-        assertThat(checkstyle1).hasNewSize(1);
-        assertThat(checkstyle1).hasFixedSize(0);
-        assertThat(checkstyle1).hasReferenceBuild(1);
+        assertWarningsAndQualityGate(checkstyle1, QualityGateResult.UNSTABLE, "CheckStyle: 2 warnings", 1, 0, 1);
 
         //Validate that the reset button is not visible for user with readOnly permission
-        jenkins.logout();
-        jenkins.login().doLogin(READONLY_USERNAME);
-        build1 = job.getLastBuild();
-        build1.open();
-        checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        assertThat(checkstyle1.getQualityGateResetButton()).isNull();
-        jenkins.logout();
+        checkRightsQualityGateButtonAndResetQualityGate(job, build1);
 
-        jenkins.login().doLogin(ADMIN_USERNAME);
-        build1 = job.getLastBuild();
-        build1.open();
-        checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        WebElement resetButton = checkstyle1.getQualityGateResetButton();
-        assertThat(resetButton).isNotNull();
-        resetButton.click();
-
-        //Validate that the reset button disappears after clicking it once.
-        new WebDriverWait(driver, 60).until(ExpectedConditions.invisibilityOf(resetButton));
-
-        //Verify that results still remain the same after restart
-        jenkins.restart();
-        jenkins.logout();
-        jenkins.login().doLogin(ADMIN_USERNAME);
         build1 = job.getLastBuild().shouldBeUnstable();
 
         build1.open();
         checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
-        assertThat(checkstyle1).hasNewSize(1);
-        assertThat(checkstyle1).hasFixedSize(0);
-        assertThat(checkstyle1).hasReferenceBuild(1);
+        assertWarningsAndQualityGate(checkstyle1, QualityGateResult.UNSTABLE, "CheckStyle: 2 warnings", 1, 0, 1);
         assertThat(checkstyle1.getQualityGateResetButton()).isNull();
 
         String checkstyleResult2 = job.copyResourceStep(
@@ -494,7 +408,8 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
                 + ", recipientProviders: [developers()]"
                 + ", subject: '''$DEFAULT_SUBJECT'''"
                 + ", to: '''" + RECIPIENT + "'''"
-                + ", replyTo: '''" + mail.fingerprint + "'''\n"; //Due to any reason, the global repyTo setting is not set.
+                + ", replyTo: '''" + mail.fingerprint
+                + "'''\n"; //Due to any reason, the global repyTo setting is not set.
         job.configure();
         job.script.set("node('agent')  {\n"
                 + checkstyleResult2.replace("\\", "\\\\")
@@ -508,11 +423,7 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
         build2.open();
         AnalysisSummary checkstyle2 = new AnalysisSummary(build2, CHECKSTYLE_ID);
-        assertThat(checkstyle2).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle2).hasTitleText("CheckStyle: 3 warnings");
-        assertThat(checkstyle2).hasNewSize(1);
-        assertThat(checkstyle2).hasFixedSize(0);
-        assertThat(checkstyle2).hasReferenceBuild(2);
+        assertWarningsAndQualityGate(checkstyle2, QualityGateResult.UNSTABLE, "CheckStyle: 3 warnings", 1, 0, 2);
 
         try {
             mail.assertMail(
@@ -527,6 +438,7 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
     /**
      * Configure the global mail settings with a Mailtrap account.
+     *
      * @return The mail service Mailtrap
      */
     private Mailtrap configureMail() {
@@ -534,6 +446,65 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
         Mailtrap mail = new Mailtrap("4248f76c305286", "5669cd0ed75dd3", "993b8fad4b920690a42ed751cfdaeafd", "626449");
         mail.setup(jenkins);
         return mail;
+    }
+
+    /**
+     * Assert the warnings and the quality gate.
+     *
+     * @param check
+     *         AnalysisSummary to assert.
+     * @param expectedResult
+     *         result to assert.
+     * @param expectedTitle
+     *         title to assert.
+     * @param expectedNewSize
+     *         newSize to assert.
+     * @param expectedFixedSize
+     *         fixedSize to assert.
+     * @param expectedReferenceBuild
+     *         referenceBuild to assert.
+     */
+    private void assertWarningsAndQualityGate(AnalysisSummary check, QualityGateResult expectedResult,
+            String expectedTitle, int expectedNewSize, int expectedFixedSize, int expectedReferenceBuild) {
+        assertThat(check).hasQualityGateResult(expectedResult);
+        assertThat(check).hasTitleText(expectedTitle);
+        assertThat(check).hasNewSize(expectedNewSize);
+        assertThat(check).hasFixedSize(expectedFixedSize);
+        assertThat(check).hasReferenceBuild(expectedReferenceBuild);
+    }
+
+    /**
+     * Check the rights for the button reset quality gate and click it. Restarts Jenkins.
+     *
+     * @param job
+     *         the job to use.
+     * @param build
+     *         the build to use.
+     */
+    private void checkRightsQualityGateButtonAndResetQualityGate(Job job, Build build) {
+        jenkins.logout();
+        jenkins.login().doLogin(READONLY_USERNAME);
+        build = job.getLastBuild();
+        build.open();
+        AnalysisSummary checkstyle = new AnalysisSummary(build, CHECKSTYLE_ID);
+        assertThat(checkstyle.getQualityGateResetButton()).isNull();
+        jenkins.logout();
+
+        jenkins.login().doLogin(ADMIN_USERNAME);
+        build = job.getLastBuild();
+        build.open();
+        checkstyle = new AnalysisSummary(build, CHECKSTYLE_ID);
+        WebElement resetButton = checkstyle.getQualityGateResetButton();
+        assertThat(resetButton).isNotNull();
+        resetButton.click();
+
+        //Validate that the reset button disappears after clicking it once.
+        new WebDriverWait(driver, 60).until(ExpectedConditions.invisibilityOf(resetButton));
+
+        //Verify that results still remain the same after restart
+        jenkins.restart();
+        jenkins.logout();
+        jenkins.login().doLogin(ADMIN_USERNAME);
     }
 
     /**
