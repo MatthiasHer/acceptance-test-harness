@@ -16,8 +16,9 @@ import java.util.regex.Pattern;
 import javax.mail.MessagingException;
 
 import org.junit.Test;
-import org.openqa.selenium.By;
 import org.openqa.selenium.WebElement;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.WebDriverWait;
 
 import com.google.inject.Inject;
 
@@ -27,9 +28,11 @@ import org.jenkinsci.test.acceptance.junit.AbstractJUnitTest;
 import org.jenkinsci.test.acceptance.junit.WithCredentials;
 import org.jenkinsci.test.acceptance.junit.WithDocker;
 import org.jenkinsci.test.acceptance.junit.WithPlugins;
-import org.jenkinsci.test.acceptance.plugins.mailer.Mailer;
+import org.jenkinsci.test.acceptance.plugins.email_ext.EmailExtPublisher;
+import org.jenkinsci.test.acceptance.plugins.matrix_auth.MatrixAuthorizationStrategy;
 import org.jenkinsci.test.acceptance.plugins.maven.MavenInstallation;
 import org.jenkinsci.test.acceptance.plugins.maven.MavenModuleSet;
+import org.jenkinsci.test.acceptance.plugins.mock_security_realm.MockSecurityRealm;
 import org.jenkinsci.test.acceptance.plugins.ssh_slaves.SshSlaveLauncher;
 import org.jenkinsci.test.acceptance.plugins.warnings_ng.AbstractNonDetailsIssuesTableRow;
 import org.jenkinsci.test.acceptance.plugins.warnings_ng.AnalysisResult;
@@ -52,11 +55,14 @@ import org.jenkinsci.test.acceptance.po.Build;
 import org.jenkinsci.test.acceptance.po.Build.Result;
 import org.jenkinsci.test.acceptance.po.DumbSlave;
 import org.jenkinsci.test.acceptance.po.FreeStyleJob;
+import org.jenkinsci.test.acceptance.po.GlobalSecurityConfig;
+import org.jenkinsci.test.acceptance.po.JenkinsDatabaseSecurityRealm;
 import org.jenkinsci.test.acceptance.po.Job;
 import org.jenkinsci.test.acceptance.po.Slave;
 import org.jenkinsci.test.acceptance.po.WorkflowJob;
 import org.jenkinsci.test.acceptance.slave.LocalSlaveController;
 import org.jenkinsci.test.acceptance.slave.SlaveController;
+import org.jenkinsci.test.acceptance.utils.mail.MailService;
 import org.jenkinsci.test.acceptance.utils.mail.Mailtrap;
 
 import static org.jenkinsci.test.acceptance.plugins.warnings_ng.Assertions.*;
@@ -76,6 +82,8 @@ import static org.jenkinsci.test.acceptance.plugins.warnings_ng.Assertions.*;
  * @author Arne Schöntag
  * @author Alexandra Wenzel
  * @author Nikolai Wohlgemuth
+ * @author Tanja Roithmeier
+ * @author Matthias Herpers
  */
 @WithPlugins("warnings-ng")
 public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
@@ -100,6 +108,10 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
     private static final String NO_PACKAGE = "-";
 
+    private static final String ADMIN_USERNAME = "admin";
+    private static final String READONLY_USERNAME = "user";
+    private static final String RECIPIENT="root@example.com";
+
     /**
      * Credentials to access the docker container. The credentials are stored with the specified ID and use the provided
      * SSH key. Use the following annotation on your test case to use the specified docker container as git server or
@@ -117,46 +129,181 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
     @Inject
     private DockerContainerHolder<JavaGitContainer> dockerContainer;
 
+    /**
+     * Runs three builds on a freestyle job configured with checkstyle, quality gate and email notification. Verify that
+     * the warnings are distinguished correctly and the email contains the right warnings count.
+     */
+    @Test
+    @WithPlugins({"token-macro", "email-ext"})
+    public void should_distinct_warnings_if_quality_gate_not_passed_freestyle()
+            throws IOException, MessagingException {
+
+        MailService mail = configureMail();
+
+        Slave agent = createAgent();
+
+        FreeStyleJob job = createFreeStyleJobForDockerAgent(agent, "qualityGate_test/build_00");
+        job.configure();
+        job.addPublisher(IssuesRecorder.class, recorder -> {
+            recorder.setTool("CheckStyle");
+            recorder.setEnabledForFailure(true);
+            recorder.addQualityGateConfiguration(2, QualityGateType.TOTAL, true);
+        });
+        job.save();
+
+        buildJob(job);
+
+        reconfigureJobWithResource(job, "qualityGate_test/build_01");
+
+        Build build1 = buildJob(job).shouldBe(Result.UNSTABLE);
+
+        build1.open();
+        AnalysisSummary checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
+        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
+        assertThat(checkstyle1).hasNewSize(1);
+        assertThat(checkstyle1).hasFixedSize(0);
+        assertThat(checkstyle1).hasReferenceBuild(1);
+
+        //Verify that results still remain the same after restart
+        jenkins.restart();
+        build1 = job.getLastBuild().shouldBe(Result.UNSTABLE);
+
+        build1.open();
+        checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
+        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
+        assertThat(checkstyle1).hasNewSize(1);
+        assertThat(checkstyle1).hasFixedSize(0);
+        assertThat(checkstyle1).hasReferenceBuild(1);
+
+        reconfigureJobWithResource(job, "qualityGate_test/build_02");
+        job.configure();
+        job.addShellStep("fail");    //The job must fail, otherwise no email is send
+        job.addPublisher(EmailExtPublisher.class, mailer -> {
+                    mailer.setRecipient(RECIPIENT);
+                    mailer.body.set("$DEFAULT_CONTENT\n Analysis issue count: $ANALYSIS_ISSUES_COUNT");
+        });
+        job.save();
+
+        Build build2 = buildJob(job).shouldFail();
+
+        build2.open();
+        AnalysisSummary checkstyle2 = new AnalysisSummary(build2, CHECKSTYLE_ID);
+        assertThat(checkstyle2).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyle2).hasTitleText("CheckStyle: 3 warnings");
+        assertThat(checkstyle2).hasNewSize(2);
+        assertThat(checkstyle2).hasFixedSize(0);
+        assertThat(checkstyle2).hasReferenceBuild(1);
+
+        mail.assertMail(
+                Pattern.compile(".* - Build # 3 - Failure!"),
+                RECIPIENT,
+                Pattern.compile("Analysis issue count: 3"));
+    }
+
+
+    /**
+     * Runs three builds on a pipeline job configured with checkstyle, quality gate and email notification. Verify that
+     * the warnings are distinguished correctly and the email contains the right warnings count.
+     */
     @Test
     @WithPlugins({"token-macro", "workflow-cps", "pipeline-stage-step", "workflow-durable-task-step", "workflow-basic-steps"})
-    public void should_distinct_warnings_pipeline() { //emailext attachLog: true, body: '', subject: '', to: 'root@example.com'
-        /*ignoreQualityGate: true,
-        recordIssues enabledForFailure: true, qualityGates: [[threshold: 1, type: 'TOTAL', unstable: true]], tools: [checkStyle()]*/
+    public void should_distinct_warnings_pipeline() throws IOException, MessagingException {
+
+        MailService mail = configureMail();
+
+        createAgent();
         WorkflowJob job = jenkins.jobs.create(WorkflowJob.class);
+
+        String checkstyleAndQualityGateScript = "recordIssues tool: checkStyle(pattern: '**/checkstyle*')"
+                + ", qualityGates: [[threshold: 2, type: 'TOTAL', unstable: true]]\n";
 
         String checkstyleResult = job.copyResourceStep(
                 WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_00/checkstyle-result.xml");
         job.configure();
-        job.script.set("node {\n"
+        job.script.set("node('agent')  {\n"
                 + checkstyleResult.replace("\\", "\\\\")
-                + "recordIssues tool: checkStyle(pattern: '**/checkstyle*')\n"
-                + "qualityGates: [[threshold: 2, type: 'TOTAL', unstable: true]]\n"
+                + checkstyleAndQualityGateScript + "}");
+        job.sandbox.check();
+        ;
+        job.save();
+
+        buildJob(job);
+
+        String checkstyleResult1 = job.copyResourceStep(
+                WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_01/checkstyle-result.xml");
+        job.configure();
+        job.script.set("node('agent')  {\n"
+                + checkstyleResult1.replace("\\", "\\\\")
+                + checkstyleAndQualityGateScript + "}");
+        job.sandbox.check();
+        job.save();
+        Build build1 = buildJob(job).shouldBeUnstable();
+
+        build1.open();
+        AnalysisSummary checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
+        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
+        assertThat(checkstyle1).hasNewSize(1);
+        assertThat(checkstyle1).hasFixedSize(0);
+        assertThat(checkstyle1).hasReferenceBuild(1);
+
+        //Verify that results still remain the same after restart
+        jenkins.restart();
+        build1 = job.getLastBuild().shouldBeUnstable();
+        build1.open();
+        checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
+        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
+        assertThat(checkstyle1).hasNewSize(1);
+        assertThat(checkstyle1).hasFixedSize(0);
+        assertThat(checkstyle1).hasReferenceBuild(1);
+
+        String checkstyleResult2 = job.copyResourceStep(
+                WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_02/checkstyle-result.xml");
+        String mailScript = "emailext body: '''$DEFAULT_CONTENT\n Analysis issue count: $ANALYSIS_ISSUES_COUNT'''"
+        +", recipientProviders: [developers()], subject: '', to: '"+RECIPIENT+"'\n";
+        job.configure();
+        job.script.set("node('agent')  {\n"
+                + checkstyleResult2.replace("\\", "\\\\")
+                + checkstyleAndQualityGateScript
+                + mailScript
+                + "currentBuild.result = 'FAILURE'\n"
                 + "}");
         job.sandbox.check();
         job.save();
 
-        Build referenceBuild = buildJob(job);
+        Build build2 = buildJob(job).shouldBeUnstable();
 
-        String checkstyleResult1 = job.copyResourceStep(
-                WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_01/checkstyle-result.xml");
+        build2.open();
+        AnalysisSummary checkstyle2 = new AnalysisSummary(build2, CHECKSTYLE_ID);
+        assertThat(checkstyle2).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyle2).hasTitleText("CheckStyle: 3 warnings");
+        assertThat(checkstyle2).hasNewSize(2);
+        assertThat(checkstyle2).hasFixedSize(0);
+        assertThat(checkstyle2).hasReferenceBuild(1);
 
-        Build build1 = buildJob(job);
-
-        AnalysisSummary checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
-        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
-        assertThat(checkstyle1).hasNewSize(2);
-        assertThat(checkstyle1).hasFixedSize(0);
-        assertThat(checkstyle1).hasReferenceBuild(1);
+        mail.assertMail(
+                Pattern.compile(".* - Build # 3 - Failure!"),
+                RECIPIENT,
+                Pattern.compile("Analysis issue count: 3"));
 
     }
 
+    /**
+     * Runs three builds on a freestyle job configured with checkstyle, quality gate and email notification. Verifies
+     * that the button to reset quality gate behaves correct, the warnings are distinguished correctly after resetting
+     * the quality gate and the email contains the right warnings count.
+     */
     @Test
-    public void should_distinct_warnings()
-            throws IOException, MessagingException, ExecutionException, InterruptedException {
+    @WithPlugins({"email-ext", "token-macro", "mock-security-realm", "matrix-auth@2.3"})
+    public void should_reset_QualityGate() throws IOException, MessagingException {
 
-        Mailtrap mail = new Mailtrap("4248f76c305286", "5669cd0ed75dd3", "993b8fad4b920690a42ed751cfdaeafd", "626449");
-        mail.setup(jenkins);
+        MailService mail = configureMail();
+
+        configureSecurity(ADMIN_USERNAME, READONLY_USERNAME);
+        jenkins.login().doLogin(ADMIN_USERNAME);
 
         Slave agent = createAgent();
         FreeStyleJob job = createFreeStyleJobForDockerAgent(agent, "qualityGate_test/build_00");
@@ -166,47 +313,173 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
             recorder.setEnabledForFailure(true);
             recorder.addQualityGateConfiguration(2, QualityGateType.TOTAL, true);
         });
-        Mailer mailer = job.addPublisher(Mailer.class);
-        mailer.recipients.set("root@example.com");
         job.save();
 
         buildJob(job);
 
         reconfigureJobWithResource(job, "qualityGate_test/build_01");
 
-        Build referenceBuild = buildJob(job).shouldBe(Result.UNSTABLE);
+        Build build1 = buildJob(job).shouldBe(Result.UNSTABLE);
 
-        referenceBuild.open();
-        AnalysisSummary checkstyle1 = new AnalysisSummary(referenceBuild, CHECKSTYLE_ID);
+        build1.open();
+        AnalysisSummary checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
         assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
         assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
         assertThat(checkstyle1).hasNewSize(1);
         assertThat(checkstyle1).hasFixedSize(0);
         assertThat(checkstyle1).hasReferenceBuild(1);
 
+        //Validate that the reset button is not visible for user with readOnly permission
+        jenkins.logout();
+        jenkins.login().doLogin(READONLY_USERNAME);
+        build1 = job.getLastBuild();
+        build1.open();
+        checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
+        assertThat(checkstyle1.getQualityGateResetButton()).isNull();
+        jenkins.logout();
+
+        jenkins.login().doLogin(ADMIN_USERNAME);
+        build1 = job.getLastBuild();
+        build1.open();
+        checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
+        WebElement resetButton = checkstyle1.getQualityGateResetButton();
+        assertThat(resetButton).isNotNull();
+        resetButton.click();
+
+        //Validate that the reset button disappears after clicking it once.
+        new WebDriverWait(driver, 60).until(ExpectedConditions.invisibilityOf(resetButton));
+
+        //Verify that results still remain the same after restart
+        jenkins.restart();
+        build1 = job.getLastBuild().shouldBeUnstable();
+        build1.open();
+        checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
+        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
+        assertThat(checkstyle1).hasNewSize(1);
+        assertThat(checkstyle1).hasFixedSize(0);
+        assertThat(checkstyle1).hasReferenceBuild(1);
+        //assertThat(checkstyle1.getQualityGateResetButton()).isNotNull();
+
         reconfigureJobWithResource(job, "qualityGate_test/build_02");
+        job.configure();
+        job.addShellStep("fail");    //The job must fail, otherwise no email is send
+        job.addPublisher(EmailExtPublisher.class, mailer -> {
+            mailer.setRecipient(RECIPIENT);
+            mailer.body.set("$DEFAULT_CONTENT\n Analysis issue count: $ANALYSIS_ISSUES_COUNT");
+        });
+        job.save();
 
-        // jenkins.restart();
-        Build build = buildJob(job).shouldBe(Result.UNSTABLE);
+        Build build2 = buildJob(job).shouldBe(Result.UNSTABLE);
 
-        //System.out.print(build.getConsole());
-        build.open();
-        AnalysisSummary checkstyle2 = new AnalysisSummary(build, CHECKSTYLE_ID);
+        build2.open();
+        AnalysisSummary checkstyle2 = new AnalysisSummary(build2, CHECKSTYLE_ID);
         assertThat(checkstyle2).hasQualityGateResult(QualityGateResult.UNSTABLE);
         assertThat(checkstyle2).hasTitleText("CheckStyle: 3 warnings");
-        assertThat(checkstyle2).hasNewSize(2);
+        assertThat(checkstyle2).hasNewSize(1);
         assertThat(checkstyle2).hasFixedSize(0);
-        assertThat(checkstyle2).hasReferenceBuild(1);
+        assertThat(checkstyle2).hasReferenceBuild(2);
 
         mail.assertMail(
-                Pattern.compile("Jenkins build is still unstable: .* #3"),
-                "root@example.com",
-                Pattern.compile(" "));
+                Pattern.compile(".* - Build # 3 - Failure!"),
+                RECIPIENT,
+                Pattern.compile("Analysis issue count: 3"));
     }
 
-    private Slave createAgent() throws ExecutionException, InterruptedException {
+    /**
+     * Runs three builds on a pipeline job configured with checkstyle, quality gate and email notification. Verifies
+     * that the button to reset quality gate behaves correct, the warnings are distinguished correctly after resetting
+     * the quality gate and the email contains the right warnings count.
+     */
+    @Test
+    @WithPlugins({"email-ext", "mock-security-realm", "matrix-auth@2.3", "token-macro", "workflow-cps", "pipeline-stage-step", "workflow-durable-task-step", "workflow-basic-steps", "mock-security-realm", "matrix-auth@2.3"})
+    public void should_reset_QualityGate_pipeline() {
+
+        MailService mail = configureMail();
+
+        String admin = "admin";
+        String user = "user";
+        configureSecurity(admin, user);
+        jenkins.login().doLogin(admin);
+
+        createAgent();
+        WorkflowJob job = jenkins.jobs.create(WorkflowJob.class);
+
+        String checkstyleAndQualityGateScript = "recordIssues tool: checkStyle(pattern: '**/checkstyle*')"
+                + ", qualityGates: [[threshold: 2, type: 'TOTAL', unstable: true]]\n";
+
+        String checkstyleResult = job.copyResourceStep(
+                WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_00/checkstyle-result.xml");
+        job.configure();
+        job.script.set("node('agent')  {\n"
+                + checkstyleResult.replace("\\", "\\\\")
+                + checkstyleAndQualityGateScript + "}");
+        job.sandbox.check();
+        job.save();
+
+        buildJob(job);
+
+        String checkstyleResult1 = job.copyResourceStep(
+                WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_01/checkstyle-result.xml");
+        job.configure();
+        job.script.set("node('agent')  {\n"
+                + checkstyleResult1.replace("\\", "\\\\")
+                + checkstyleAndQualityGateScript + "}");
+        job.sandbox.check();
+        job.save();
+        Build build1 = buildJob(job).shouldBeUnstable();
+
+        build1.open();
+        AnalysisSummary checkstyle1 = new AnalysisSummary(build1, CHECKSTYLE_ID);
+        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
+        assertThat(checkstyle1).hasNewSize(1);
+        assertThat(checkstyle1).hasFixedSize(0);
+        assertThat(checkstyle1).hasReferenceBuild(1);
+
+        String checkstyleResult2 = job.copyResourceStep(
+                WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_02/checkstyle-result.xml");
+        job.configure();
+        job.script.set("node('agent')  {\n"
+                + checkstyleResult2.replace("\\", "\\\\")
+                + checkstyleAndQualityGateScript + "}");
+        job.sandbox.check();
+        job.save();
+
+        Build build2 = buildJob(job).shouldBeUnstable();
+
+        build2.open();
+        AnalysisSummary checkstyle2 = new AnalysisSummary(build2, CHECKSTYLE_ID);
+        assertThat(checkstyle2).hasQualityGateResult(QualityGateResult.UNSTABLE);
+        assertThat(checkstyle2).hasTitleText("CheckStyle: 3 warnings");
+        assertThat(checkstyle2).hasNewSize(1);
+        assertThat(checkstyle2).hasFixedSize(0);
+        assertThat(checkstyle2).hasReferenceBuild(2);
+
+    }
+
+    private MailService configureMail() {
+        //todo: Change mail account to any common test account
+        Mailtrap mail = new Mailtrap("4248f76c305286", "5669cd0ed75dd3", "993b8fad4b920690a42ed751cfdaeafd", "626449");
+        mail.setup(jenkins);
+        return mail;
+    }
+
+    /**
+     * Creates an agent without a Docker container.
+     *
+     * @return the new agent ready for new builds
+     */
+    private Slave createAgent() {
         SlaveController controller = new LocalSlaveController();
-        Slave agent = controller.install(jenkins).get();
+        Slave agent;
+        try {
+            agent = controller.install(jenkins).get();
+        }
+        catch (InterruptedException | ExecutionException e) {
+            throw new AssertionError(e);
+        }
+
         agent.configure();
         agent.setLabels("agent");
         agent.save();
@@ -216,76 +489,24 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
         return agent;
     }
 
-    private boolean isWebElementDisappeared(Build build, By selector, int maxRepetition) {
-        boolean iO = false;
-        int repetition = 0;
-
-        while (repetition < maxRepetition) {
-            WebElement element = build.getElement(selector);
-            if (element == null) {
-                return true;
-            }
-            repetition++;
-        }
-        return false;
-    }
-
-    @Test
-    public void should_reset_QualityGate()
-            throws IOException, MessagingException, ExecutionException, InterruptedException {
-
-        Mailtrap mail = new Mailtrap("4248f76c305286", "5669cd0ed75dd3", "993b8fad4b920690a42ed751cfdaeafd", "626449");
-        mail.setup(jenkins);
-
-        Slave agent = createAgent();
-        FreeStyleJob job = createFreeStyleJobForDockerAgent(agent, "qualityGate_test/build_00");
-        job.configure();
-        job.addPublisher(IssuesRecorder.class, recorder -> {
-            recorder.setTool("CheckStyle");
-            recorder.setEnabledForFailure(true);
-            recorder.addQualityGateConfiguration(2, QualityGateType.TOTAL, true);
+    /**
+     * Configure the global security and adding two Users.
+     *
+     * @param admin
+     *         Username, for which a user with admin permission is created.
+     * @param readOnlyUser
+     *         Username, for which a user with read-only permission is created.
+     */
+    private void configureSecurity(final String admin, final String readOnlyUser) {
+        GlobalSecurityConfig security = new GlobalSecurityConfig(jenkins);
+        security.configure(() -> {
+            MockSecurityRealm realm = security.useRealm(MockSecurityRealm.class);
+            realm.configure(admin, readOnlyUser);
+            MatrixAuthorizationStrategy mas = security.useAuthorizationStrategy(MatrixAuthorizationStrategy.class);
+            mas.addUser(admin).admin();
+            mas.addUser(readOnlyUser).readOnly();
+            mas.getUser("anonymous").readOnly();
         });
-        Mailer mailer = job.addPublisher(Mailer.class);
-        mailer.recipients.set("root@example.com");
-        job.save();
-
-        buildJob(job);
-
-        reconfigureJobWithResource(job, "qualityGate_test/build_01");
-
-        Build referenceBuild = buildJob(job).shouldBe(Result.UNSTABLE);
-
-        referenceBuild.open();
-        AnalysisSummary checkstyle1 = new AnalysisSummary(referenceBuild, CHECKSTYLE_ID);
-        assertThat(checkstyle1).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle1).hasTitleText("CheckStyle: 2 warnings");
-        assertThat(checkstyle1).hasNewSize(1);
-        assertThat(checkstyle1).hasFixedSize(0);
-        assertThat(checkstyle1).hasReferenceBuild(1);
-
-        referenceBuild.openStatusPage();
-        String resetButton = "Reset quality gate";
-        referenceBuild.clickButton(resetButton);
-        boolean isButtonDisappeared = isWebElementDisappeared(referenceBuild, by.button(resetButton), 200);
-        assertThat(isButtonDisappeared).isTrue();
-
-        reconfigureJobWithResource(job, "qualityGate_test/build_02");
-
-        // jenkins.restart();
-        Build build = buildJob(job).shouldBe(Result.UNSTABLE);
-
-        build.open();
-        AnalysisSummary checkstyle2 = new AnalysisSummary(build, CHECKSTYLE_ID);
-        assertThat(checkstyle2).hasQualityGateResult(QualityGateResult.UNSTABLE);
-        assertThat(checkstyle2).hasTitleText("CheckStyle: 3 warnings");
-        assertThat(checkstyle2).hasNewSize(1);
-        assertThat(checkstyle2).hasFixedSize(0);
-        assertThat(checkstyle2).hasReferenceBuild(2);
-
-        mail.assertMail(
-                Pattern.compile("Jenkins build is still unstable: .* #3"),
-                "root@example.com",
-                Pattern.compile(" "));
     }
 
     /**
