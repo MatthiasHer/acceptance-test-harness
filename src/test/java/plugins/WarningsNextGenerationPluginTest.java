@@ -56,7 +56,6 @@ import org.jenkinsci.test.acceptance.po.Build.Result;
 import org.jenkinsci.test.acceptance.po.DumbSlave;
 import org.jenkinsci.test.acceptance.po.FreeStyleJob;
 import org.jenkinsci.test.acceptance.po.GlobalSecurityConfig;
-import org.jenkinsci.test.acceptance.po.JenkinsDatabaseSecurityRealm;
 import org.jenkinsci.test.acceptance.po.Job;
 import org.jenkinsci.test.acceptance.po.Slave;
 import org.jenkinsci.test.acceptance.po.WorkflowJob;
@@ -110,7 +109,7 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
     private static final String ADMIN_USERNAME = "admin";
     private static final String READONLY_USERNAME = "user";
-    private static final String RECIPIENT="root@example.com";
+    private static final String RECIPIENT = "root@example.com";
 
     /**
      * Credentials to access the docker container. The credentials are stored with the specified ID and use the provided
@@ -135,10 +134,9 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
      */
     @Test
     @WithPlugins({"token-macro", "email-ext"})
-    public void should_distinct_warnings_if_quality_gate_not_passed_freestyle()
-            throws IOException, MessagingException {
+    public void should_distinct_warnings_if_quality_gate_not_passed_freestyle() {
 
-        MailService mail = configureMail();
+        Mailtrap mail = configureMail();
 
         Slave agent = createAgent();
 
@@ -181,8 +179,8 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
         job.configure();
         job.addShellStep("fail");    //The job must fail, otherwise no email is send
         job.addPublisher(EmailExtPublisher.class, mailer -> {
-                    mailer.setRecipient(RECIPIENT);
-                    mailer.body.set("$DEFAULT_CONTENT\n Analysis issue count: $ANALYSIS_ISSUES_COUNT");
+            mailer.setRecipient(RECIPIENT);
+            mailer.body.set("$DEFAULT_CONTENT\n Analysis issue count: $ANALYSIS_ISSUES_COUNT");
         });
         job.save();
 
@@ -196,12 +194,16 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
         assertThat(checkstyle2).hasFixedSize(0);
         assertThat(checkstyle2).hasReferenceBuild(1);
 
-        mail.assertMail(
-                Pattern.compile(".* - Build # 3 - Failure!"),
-                RECIPIENT,
-                Pattern.compile("Analysis issue count: 3"));
+        try {
+            mail.assertMail(
+                    Pattern.compile(".* - Build # 3 - Failure!"),
+                    RECIPIENT,
+                    Pattern.compile("Analysis issue count: 3"));
+        }
+        catch (MessagingException | IOException e) {
+            new AssertionError("Error at assert email. " + e);
+        }
     }
-
 
     /**
      * Runs three builds on a pipeline job configured with checkstyle, quality gate and email notification. Verify that
@@ -209,9 +211,9 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
      */
     @Test
     @WithPlugins({"token-macro", "workflow-cps", "pipeline-stage-step", "workflow-durable-task-step", "workflow-basic-steps"})
-    public void should_distinct_warnings_pipeline() throws IOException, MessagingException {
+    public void should_distinct_warnings_if_quality_gate_not_passed_pipeline() {
 
-        MailService mail = configureMail();
+        Mailtrap mail = configureMail();
 
         createAgent();
         WorkflowJob job = jenkins.jobs.create(WorkflowJob.class);
@@ -226,7 +228,6 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
                 + checkstyleResult.replace("\\", "\\\\")
                 + checkstyleAndQualityGateScript + "}");
         job.sandbox.check();
-        ;
         job.save();
 
         buildJob(job);
@@ -262,19 +263,23 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
         String checkstyleResult2 = job.copyResourceStep(
                 WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_02/checkstyle-result.xml");
-        String mailScript = "emailext body: '''$DEFAULT_CONTENT\n Analysis issue count: $ANALYSIS_ISSUES_COUNT'''"
-        +", recipientProviders: [developers()], subject: '', to: '"+RECIPIENT+"'\n";
+
+        String mailScript = " emailext body: '''$DEFAULT_CONTENT\n Analysis issue count: $ANALYSIS_ISSUES_COUNT'''"
+                + ", recipientProviders: [developers()]"
+                + ", subject: '''$DEFAULT_SUBJECT'''"
+                + ", to: '''" + RECIPIENT + "'''"
+                + ", replyTo: '''" + mail.fingerprint + "'''\n"; //Due to any reason, the global repyTo setting is not set.
+
         job.configure();
         job.script.set("node('agent')  {\n"
                 + checkstyleResult2.replace("\\", "\\\\")
                 + checkstyleAndQualityGateScript
                 + mailScript
-                + "currentBuild.result = 'FAILURE'\n"
                 + "}");
         job.sandbox.check();
         job.save();
 
-        Build build2 = buildJob(job).shouldFail();
+        Build build2 = buildJob(job).shouldBeUnstable();
 
         build2.open();
         AnalysisSummary checkstyle2 = new AnalysisSummary(build2, CHECKSTYLE_ID);
@@ -284,11 +289,15 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
         assertThat(checkstyle2).hasFixedSize(0);
         assertThat(checkstyle2).hasReferenceBuild(1);
 
-        mail.assertMail(
-                Pattern.compile(".* - Build # 3 - Failure!"),
-                RECIPIENT,
-                Pattern.compile("Analysis issue count: 3"));
-
+        try {
+            mail.assertMail(
+                    Pattern.compile(".* - Build # 3 - Still Unstable!"),
+                    RECIPIENT,
+                    Pattern.compile("Analysis issue count: 3"));
+        }
+        catch (MessagingException | IOException e) {
+            new AssertionError("Error at assert email. " + e);
+        }
     }
 
     /**
@@ -298,7 +307,7 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
      */
     @Test
     @WithPlugins({"email-ext", "token-macro", "mock-security-realm", "matrix-auth@2.3"})
-    public void should_reset_QualityGate() throws IOException, MessagingException {
+    public void should_distinct_warnings_if_quality_gate_reset_freestyle() {
 
         MailService mail = configureMail();
 
@@ -382,10 +391,15 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
         assertThat(checkstyle2).hasFixedSize(0);
         assertThat(checkstyle2).hasReferenceBuild(2);
 
-        mail.assertMail(
-                Pattern.compile(".* - Build # 3 - Failure!"),
-                RECIPIENT,
-                Pattern.compile("Analysis issue count: 3"));
+        try {
+            mail.assertMail(
+                    Pattern.compile(".* - Build # 3 - Failure!"),
+                    RECIPIENT,
+                    Pattern.compile("Analysis issue count: 3"));
+        }
+        catch (MessagingException | IOException e) {
+            new AssertionError("Error at assert email. " + e);
+        }
     }
 
     /**
@@ -395,9 +409,9 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
      */
     @Test
     @WithPlugins({"email-ext", "mock-security-realm", "matrix-auth@2.3", "token-macro", "workflow-cps", "pipeline-stage-step", "workflow-durable-task-step", "workflow-basic-steps", "mock-security-realm", "matrix-auth@2.3"})
-    public void should_reset_QualityGate_pipeline() throws IOException, MessagingException {
+    public void should_distinct_warnings_if_quality_gate_reset_pipeline() {
 
-        MailService mail = configureMail();
+        Mailtrap mail = configureMail();
 
         String admin = "admin";
         String user = "user";
@@ -476,15 +490,21 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
 
         String checkstyleResult2 = job.copyResourceStep(
                 WARNINGS_PLUGIN_PREFIX + "qualityGate_test/build_02/checkstyle-result.xml");
+        String mailScript = " emailext body: '''$DEFAULT_CONTENT\n Analysis issue count: $ANALYSIS_ISSUES_COUNT'''"
+                + ", recipientProviders: [developers()]"
+                + ", subject: '''$DEFAULT_SUBJECT'''"
+                + ", to: '''" + RECIPIENT + "'''"
+                + ", replyTo: '''" + mail.fingerprint + "'''\n"; //Due to any reason, the global repyTo setting is not set.
         job.configure();
-        job.addShellStep("fail");    //The job must fail, otherwise no email is send
-        job.addPublisher(EmailExtPublisher.class, mailer -> {
-            mailer.setRecipient(RECIPIENT);
-            mailer.body.set("$DEFAULT_CONTENT\n Analysis issue count: $ANALYSIS_ISSUES_COUNT");
-        });
+        job.script.set("node('agent')  {\n"
+                + checkstyleResult2.replace("\\", "\\\\")
+                + checkstyleAndQualityGateScript
+                + mailScript
+                + "}");
+        job.sandbox.check();
         job.save();
 
-        Build build2 = buildJob(job).shouldFail();
+        Build build2 = buildJob(job).shouldBeUnstable();
 
         build2.open();
         AnalysisSummary checkstyle2 = new AnalysisSummary(build2, CHECKSTYLE_ID);
@@ -494,13 +514,22 @@ public class WarningsNextGenerationPluginTest extends AbstractJUnitTest {
         assertThat(checkstyle2).hasFixedSize(0);
         assertThat(checkstyle2).hasReferenceBuild(2);
 
-        mail.assertMail(
-                Pattern.compile(".* - Build # 3 - Failure!"),
-                RECIPIENT,
-                Pattern.compile("Analysis issue count: 3"));
+        try {
+            mail.assertMail(
+                    Pattern.compile(".* - Build # 3 - Still Unstable!"),
+                    RECIPIENT,
+                    Pattern.compile("Analysis issue count: 3"));
+        }
+        catch (MessagingException | IOException e) {
+            new AssertionError("Error at assert email. " + e);
+        }
     }
 
-    private MailService configureMail() {
+    /**
+     * Configure the global mail settings with a Mailtrap account.
+     * @return The mail service Mailtrap
+     */
+    private Mailtrap configureMail() {
         //todo: Change mail account to any common test account
         Mailtrap mail = new Mailtrap("4248f76c305286", "5669cd0ed75dd3", "993b8fad4b920690a42ed751cfdaeafd", "626449");
         mail.setup(jenkins);
